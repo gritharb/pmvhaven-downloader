@@ -1,161 +1,74 @@
-// background.js (V2.2) - COMPLETE FILE
+// background.js (V2.3) - Updated for new website layout
 
-console.log('[BarebonesBgV2.2] Background script loaded.'); // Version marker
+console.log('[BarebonesBgV2.3] Background script loaded.'); // Version marker
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function getDownloadUrlFromPage(tabId, videoPageUrl) {
-  console.log(`[BarebonesBgV2.2][Tab ${tabId}] Processing: ${videoPageUrl}`); // Version marker
+  console.log(`[BarebonesBgV2.3][Tab ${tabId}] Processing: ${videoPageUrl}`); // Version marker
 
-  try {
-    console.log(`[BarebonesBgV2.2][Tab ${tabId}] Attempting to scroll page.`); // Version marker
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => window.scrollTo(0, 312)
-    });
-    await delay(500); 
-  } catch (e) {
-    console.warn(`[BarebonesBgV2.2][Tab ${tabId}] Scroll failed (continuing):`, e.message); // Version marker
+  // Extract video ID from URL (format: /video/title_VIDEO_ID)
+  const urlMatch = videoPageUrl.match(/\/video\/[^_]+_([a-f0-9]+)/);
+  if (!urlMatch) {
+    console.error(`[BarebonesBgV2.3][Tab ${tabId}] Could not extract video ID from URL: ${videoPageUrl}`);
+    throw new Error('Could not extract video ID from URL');
   }
-
-  // 1. Wait for and Click the initial "Download" button/link.
-  let initialClickSuccessful = false;
+  
+  const videoId = urlMatch[1];
+  const downloadUrl = `https://pmvhaven.com/api/videos/${videoId}/download?quality=original`;
+  
+  console.log(`[BarebonesBgV2.3][Tab ${tabId}] Constructed download URL: ${downloadUrl}`);
+  
+  // Extract title and artist from the page for better filename
   try {
-    console.log(`[BarebonesBgV2.2][Tab ${tabId}] Waiting for and attempting to click the initial 'Download' link.`); // Version marker
-    const clickResults = await chrome.scripting.executeScript({
+    console.log(`[BarebonesBgV2.3][Tab ${tabId}] Extracting title and artist from page...`);
+    const metadataResults = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        // This is an IIFE Promise to allow async operations like polling
         return new Promise((resolve, reject) => {
-          const initialButtonSelector = 'div.mt-2.download-btn a.pa-2.download-btn';
           let attempts = 0;
-          const maxAttempts = 20; // Poll for up to 10 seconds (20 * 500ms) for the initial button
-
-          console.log(`Script (poll-initial): Starting to poll for initial button: ${initialButtonSelector}`);
+          const maxAttempts = 40; // Increased from 20 to 40 (20 seconds)
 
           const intervalId = setInterval(() => {
-            const initialDownloadLink = document.querySelector(initialButtonSelector);
+            // Extract title from h1
+            const titleElement = document.querySelector('h1[data-v-1404a3d0]');
+            // Extract artist from h3 with gradient text
+            const artistElement = document.querySelector('h3.font-semibold.inline-flex');
             
-            if (initialDownloadLink && initialDownloadLink.textContent.trim().includes('Download')) {
+            if (titleElement && artistElement) {
               clearInterval(intervalId);
-              console.log('Script (poll-initial): Found initial download link:', initialDownloadLink);
-              initialDownloadLink.click(); // Perform the click
-              // Basic check after click
-              resolve({ clicked: true, visibleAfterClick: !!(initialDownloadLink.offsetParent !== null) });
+              
+              const title = titleElement.textContent.trim();
+              // Get just the artist name (before any badges/icons)
+              const artistText = artistElement.childNodes[0]?.textContent?.trim() || artistElement.textContent.split('\n')[0].trim();
+              
+              console.log('Extracted metadata - Title:', title, 'Artist:', artistText);
+              resolve({ title, artist: artistText });
               return;
             }
             
             attempts++;
             if (attempts >= maxAttempts) {
               clearInterval(intervalId);
-              const buttonExists = !!document.querySelector(initialButtonSelector);
-              const errorMsg = `Script (poll-initial): Initial "Download" link ('${initialButtonSelector}') not found after ${maxAttempts} attempts or text mismatch. (Button exists on page: ${buttonExists})`;
-              console.error(errorMsg);
-              if (buttonExists) {
-                  console.log("Script (poll-initial timeout): Details of existing button found by selector:", document.querySelector(initialButtonSelector).outerHTML.substring(0,300));
-              }
-              reject(new Error(errorMsg)); // Reject the promise from within executeScript
-            } else {
-                // console.log(`Script (poll-initial attempt ${attempts}): Initial button not yet found or ready.`);
-            }
-          }, 500); // Poll every 500ms
-        });
-      }
-    });
-
-    // Check the result from the executeScript promise
-    if (clickResults && clickResults[0] && clickResults[0].result && clickResults[0].result.clicked) {
-      initialClickSuccessful = true;
-      console.log(`[BarebonesBgV2.2][Tab ${tabId}] Programmatic initial 'Download' click executed. Visible after click (approx): ${clickResults[0].result.visibleAfterClick}. Waiting for final link to appear.`); // Version marker
-    } else {
-      // This path is taken if the promise from executeScript was rejected
-      const reason = (clickResults && clickResults[0] && clickResults[0].error && clickResults[0].error.message) ? clickResults[0].error.message : "Unknown reason for initial click failure (promise rejected).";
-      console.error(`[BarebonesBgV2.2][Tab ${tabId}] Programmatic initial 'Download' click FAILED. Reason: ${reason}`); // Version marker
-      throw new Error(`Initial programmatic click failed: ${reason}`);
-    }
-    await delay(3000); // Delay after initial click
-  } catch (e) {
-    // This catch handles errors from chrome.scripting.executeScript itself or if the promise was rejected.
-    const errorMessage = e.message || "Unknown error during initial click phase.";
-    console.error(`[BarebonesBgV2.2][Tab ${tabId}] Error during initial 'Download' click phase: ${errorMessage}`); // Version marker
-    if (e.stack) console.error(e.stack.substring(0, 500));
-    throw new Error(`Error during initial 'Download' click phase: ${errorMessage}`); 
-  }
-
-  // Safeguard already existed, but now initialClickSuccessful relies on a resolved promise.
-  if (!initialClickSuccessful) { 
-      console.error(`[BarebonesBgV2.2][Tab ${tabId}] Safeguard: Initial click was not successful (initialClickSuccessful is false).`); // Version marker
-      throw new Error("Safeguard: Initial click was not successful.");
-  }
-
-  // 2. Extract the href from the *final* download anchor (this part remains the same as V2.1)
-  try {
-    console.log(`[BarebonesBgV2.2][Tab ${tabId}] Attempting to extract final download link href.`); // Version marker
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => {
-        return new Promise((resolve, reject) => {
-          const finalLinkSelector = 'a[href*="storage.pmvhaven.com"]';
-          let attempts = 0;
-          const maxAttempts = 30; 
-          console.log(`Script (poll-final): Starting to poll for final link: ${finalLinkSelector}`);
-          const intervalId = setInterval(() => {
-            const linkElements = document.querySelectorAll(finalLinkSelector);
-            let finalLinkElement = null;
-            if (linkElements.length > 0) {
-                console.log(`Script (poll-final attempt ${attempts+1}): Found ${linkElements.length} candidate(s) for '${finalLinkSelector}'.`);
-            }
-            for (let el of linkElements) {
-                if (el.offsetParent !== null) { 
-                    if (el.closest('div.mt-2.download-btn')) continue;
-                    const buttonChild = el.querySelector('button');
-                    if (buttonChild && buttonChild.textContent.includes('SOURCE')) {
-                        finalLinkElement = el;
-                        console.log(`Script (poll-final attempt ${attempts+1}): Found suitable 'SOURCE' link element (anchor):`, el.href);
-                        break; 
-                    }
-                    if (!finalLinkElement) {
-                        finalLinkElement = el;
-                        console.log(`Script (poll-final attempt ${attempts+1}): Found potential (non-SOURCE) visible link element (anchor):`, el.href);
-                    }
-                }
-            }
-            if (finalLinkElement && finalLinkElement.href && finalLinkElement.href.startsWith('http')) {
-              clearInterval(intervalId);
-              console.log('Script (poll-final): Final download link successfully found and resolved:', finalLinkElement.href);
-              resolve(finalLinkElement.href);
-              return;
-            }
-            attempts++;
-            if (attempts >= maxAttempts) {
-              clearInterval(intervalId);
-              const linkExistsOnPage = !!document.querySelector(finalLinkSelector);
-              const errorMsg = `Script (poll-final): Final download link ('${finalLinkSelector}') polling timed out after ${maxAttempts} attempts. (A link matching selector exists on page: ${linkExistsOnPage})`;
-              console.error(errorMsg);
-              if (linkExistsOnPage) {
-                  const allMatching = document.querySelectorAll(finalLinkSelector);
-                  allMatching.forEach((match, idx) => {
-                      console.log(`Script (poll-final timeout): Details of existing link candidate ${idx+1}:`, match.outerHTML.substring(0, 300) + "...", `Visible (offsetParent): ${match.offsetParent !== null}`);
-                  });
-              }
-              reject(new Error(errorMsg));
+              console.warn('Could not extract title/artist after 20s, will use fallback');
+              resolve({ title: null, artist: null });
             }
           }, 500);
         });
       }
     });
 
-    if (results && results[0] && results[0].result) {
-      console.log(`[BarebonesBgV2.2][Tab ${tabId}] Successfully extracted download URL: ${results[0].result}`); // Version marker
-      return results[0].result;
-    } else {
-      const rejectionReason = (results && results[0] && results[0].error && results[0].error.message) ? results[0].error.message : 'No result or unexpected result from final link extraction script.';
-      console.error(`[BarebonesBgV2.2][Tab ${tabId}] Could not extract final download URL. Reason: ${rejectionReason}`); // Version marker
-      throw new Error(`Could not extract final download URL. ${rejectionReason}`);
-    }
+    const metadata = metadataResults?.[0]?.result || { title: null, artist: null };
+    console.log(`[BarebonesBgV2.3][Tab ${tabId}] Extracted metadata:`, metadata);
+    
+    return { downloadUrl, title: metadata.title, artist: metadata.artist };
+    
   } catch (e) {
-    console.error(`[BarebonesBgV2.2][Tab ${tabId}] Error during final download link extraction phase:`, e.message, e.stack ? e.stack.substring(0,300) : ''); // Version marker
-    throw e;
+    const errorMessage = e.message || "Unknown error during metadata extraction";
+    console.error(`[BarebonesBgV2.3][Tab ${tabId}] Error during metadata extraction: ${errorMessage}`);
+    if (e.stack) console.error(e.stack.substring(0, 500));
+    // Return URL without metadata if extraction fails
+    return { downloadUrl, title: null, artist: null };
   }
 }
 
@@ -163,89 +76,145 @@ async function getDownloadUrlFromPage(tabId, videoPageUrl) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'downloadSelected' && msg.urls && msg.urls.length > 0) {
     sendResponse({ status: 'Processing started. Check background console.' });
-    console.log(`[BarebonesBgV2.2] Received ${msg.urls.length} URLs to process.`); // Version marker
+    console.log(`[BarebonesBgV2.3] Received ${msg.urls.length} URLs to process.`); // Version marker
 
     (async () => {
-      for (let i = 0; i < msg.urls.length; i++) {
-        const videoUrl = msg.urls[i];
-        console.log(`[BarebonesBgV2.2] ------ Starting URL ${i + 1}/${msg.urls.length}: ${videoUrl} ------`); // Version marker
-        let tabId;
-        try {
-          const tab = await chrome.tabs.create({ url: videoUrl, active: false });
-          tabId = tab.id;
-
-          // Wait for tab to load (listen for 'complete' status)
-          await new Promise((resolve, reject) => {
-            const listener = (updatedTabId, changeInfo, tabInfo) => {
-                if (updatedTabId === tabId && changeInfo.status === 'complete') {
-                    chrome.tabs.onUpdated.removeListener(listener);
-                    chrome.tabs.onRemoved.removeListener(removedTabListener); // Clean up removed listener
-                    clearTimeout(timeoutId); // Clear the timeout
-                    console.log(`[BarebonesBgV2.2][Tab ${tabId}] Tab loaded successfully.`); // Version marker
-                    resolve();
-                }
-            };
-            const timeoutId = setTimeout(() => { // Timeout to prevent hanging indefinitely
-                chrome.tabs.onUpdated.removeListener(listener);
-                chrome.tabs.onRemoved.removeListener(removedTabListener); // Clean up removed listener
-                console.warn(`[BarebonesBgV2.2][Tab ${tabId}] Tab load timeout after 20s, proceeding anyway but might fail.`); // Version marker
-                resolve(); // Resolve to proceed, failure will be caught by subsequent steps
-            }, 20000); // 20s timeout for tab load
-
-            // Handle cases where tab is removed before loading, or errors during load
-            const removedTabListener = function(removedTabId) {
-              if (removedTabId === tabId) {
-                chrome.tabs.onUpdated.removeListener(listener);
-                chrome.tabs.onRemoved.removeListener(removedTabListener); // Clean itself up
-                clearTimeout(timeoutId);
-                console.error(`[BarebonesBgV2.2][Tab ${tabId}] Tab was closed before loading completed.`); // Version marker
-                reject(new Error(`Tab ${tabId} was closed before loading completed.`));
-              }
-            };
-            chrome.tabs.onRemoved.addListener(removedTabListener);
-            chrome.tabs.onUpdated.addListener(listener);
-          });
+      const BATCH_SIZE = 10;
+      const batches = [];
+      
+      // Split URLs into batches of 10
+      for (let i = 0; i < msg.urls.length; i += BATCH_SIZE) {
+        batches.push(msg.urls.slice(i, i + BATCH_SIZE));
+      }
+      
+      console.log(`[BarebonesBgV2.3] Processing ${msg.urls.length} videos in ${batches.length} batches of up to ${BATCH_SIZE}`);
+      
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        console.log(`[BarebonesBgV2.3] ====== Starting Batch ${batchIndex + 1}/${batches.length} (${batch.length} videos) ======`);
+        
+        // Process all videos in this batch concurrently
+        const batchPromises = batch.map(async (videoUrl, indexInBatch) => {
+          const overallIndex = batchIndex * BATCH_SIZE + indexInBatch;
+          console.log(`[BarebonesBgV2.3] ------ Starting URL ${overallIndex + 1}/${msg.urls.length}: ${videoUrl} ------`);
+          let tabId;
           
-          const actualDownloadUrl = await getDownloadUrlFromPage(tabId, videoUrl); // Calls the updated function
+          try {
+            const tab = await chrome.tabs.create({ url: videoUrl, active: false });
+            tabId = tab.id;
 
-          if (actualDownloadUrl) {
-            console.log(`[BarebonesBgV2.2][Tab ${tabId}] Initiating download for: ${actualDownloadUrl}`); // Version marker
-            const urlParts = videoUrl.split('/');
-            const videoIdFromUrl = urlParts[urlParts.length -1] || urlParts[urlParts.length -2] || 'video_file';
-            const filenameSuffix = videoIdFromUrl.replace(/[^a-zA-Z0-9.-]/g, '_');
-            
-            chrome.downloads.download({
-              url: actualDownloadUrl,
-              filename: `pmvhaven_downloads/${filenameSuffix || 'download'}.mp4` // Basic filename, puts in a subfolder
-            });
-            console.log(`[BarebonesBgV2.2][Tab ${tabId}] Download command issued for ${actualDownloadUrl}`); // Version marker
-          } else {
-            // This path should ideally not be reached if errors are properly thrown and caught above.
-            console.error(`[BarebonesBgV2.2][Tab ${tabId}] No download URL obtained for ${videoUrl}. This indicates an issue in error propagation.`); // Version marker
-          }
+            // Wait for tab to load (listen for 'complete' status)
+            await new Promise((resolve, reject) => {
+              const listener = (updatedTabId, changeInfo, tabInfo) => {
+                  if (updatedTabId === tabId && changeInfo.status === 'complete') {
+                      chrome.tabs.onUpdated.removeListener(listener);
+                      chrome.tabs.onRemoved.removeListener(removedTabListener);
+                      clearTimeout(timeoutId);
+                      console.log(`[BarebonesBgV2.3][Tab ${tabId}] Tab loaded successfully.`);
+                      resolve();
+                  }
+              };
+              const timeoutId = setTimeout(() => {
+                  chrome.tabs.onUpdated.removeListener(listener);
+                  chrome.tabs.onRemoved.removeListener(removedTabListener);
+                  console.warn(`[BarebonesBgV2.3][Tab ${tabId}] Tab load timeout after 40s, proceeding anyway but might fail.`);
+                  resolve();
+              }, 40000); // 40s timeout for tab load
 
-        } catch (err) {
-          console.error(`[BarebonesBgV2.2][Tab ${tabId || 'N/A'}] Failed processing ${videoUrl}:`, err.message, err.stack ? err.stack.substring(0,300) : ''); // Version marker
-        } finally {
-          if (tabId) {
-            try {
-                // Add a slightly longer delay to ensure download has a chance to start if there were issues
-                await delay(2000); 
-                // Check if tab still exists before trying to remove
-                const currentTabInfo = await chrome.tabs.get(tabId).catch(() => null);
-                if (currentTabInfo) {
-                    await chrome.tabs.remove(tabId);
-                    console.log(`[BarebonesBgV2.2][Tab ${tabId}] Tab closed.`); // Version marker
-                } else {
-                    console.log(`[BarebonesBgV2.2][Tab ${tabId}] Tab already closed or does not exist, no removal needed.`);
+              const removedTabListener = function(removedTabId) {
+                if (removedTabId === tabId) {
+                  chrome.tabs.onUpdated.removeListener(listener);
+                  chrome.tabs.onRemoved.removeListener(removedTabListener);
+                  clearTimeout(timeoutId);
+                  console.error(`[BarebonesBgV2.3][Tab ${tabId}] Tab was closed before loading completed.`);
+                  reject(new Error(`Tab ${tabId} was closed before loading completed.`));
                 }
-            } catch (e) { console.warn(`[BarebonesBgV2.2][Tab ${tabId}] Failed to close tab:`, e.message); } // Version marker
+              };
+              chrome.tabs.onRemoved.addListener(removedTabListener);
+              chrome.tabs.onUpdated.addListener(listener);
+            });
+            
+            const result = await getDownloadUrlFromPage(tabId, videoUrl);
+
+            if (result && result.downloadUrl) {
+              console.log(`[BarebonesBgV2.3][Tab ${tabId}] Initiating download for: ${result.downloadUrl}`);
+              
+              // Create filename from artist and title
+              let filename;
+              if (result.artist && result.title) {
+                // Sanitize for filename - only remove filesystem-illegal characters, keep UTF-8
+                const sanitize = (str) => {
+                  return str
+                    // Remove control characters (0x00-0x1F, 0x7F-0x9F)
+                    .replace(/[\x00-\x1F\x7F-\x9F]/g, '')
+                    // Remove filesystem-illegal characters: < > : " / \ | ? *
+                    .replace(/[<>:"/\\|?*]/g, '')
+                    // Replace multiple spaces with single space
+                    .replace(/\s+/g, ' ')
+                    // Trim whitespace
+                    .trim()
+                    // Limit length to avoid filesystem issues (max 200 chars, leaving room for path)
+                    .substring(0, 200);
+                };
+                
+                const artist = sanitize(result.artist);
+                const title = sanitize(result.title);
+                filename = `${artist} - ${title}.mp4`;
+                console.log(`[BarebonesBgV2.3][Tab ${tabId}] Using filename: ${filename}`);
+              } else {
+                // Fallback to video ID from URL
+                const urlParts = videoUrl.split('/');
+                const videoIdFromUrl = urlParts[urlParts.length -1] || urlParts[urlParts.length -2] || 'video_file';
+                const filenameSuffix = videoIdFromUrl.replace(/[^a-zA-Z0-9.-]/g, '_');
+                filename = `${filenameSuffix || 'download'}.mp4`;
+                console.log(`[BarebonesBgV2.3][Tab ${tabId}] Using fallback filename: ${filename}`);
+              }
+              
+              chrome.downloads.download({
+                url: result.downloadUrl,
+                filename: `pmvhaven_downloads/${filename}`
+              });
+              console.log(`[BarebonesBgV2.3][Tab ${tabId}] Download command issued for ${result.downloadUrl}`);
+            } else {
+              console.error(`[BarebonesBgV2.3][Tab ${tabId}] No download URL obtained for ${videoUrl}.`);
+            }
+
+          } catch (err) {
+            console.error(`[BarebonesBgV2.3][Tab ${tabId || 'N/A'}] Failed processing ${videoUrl}:`, err.message, err.stack ? err.stack.substring(0,300) : '');
+            console.log(`[BarebonesBgV2.3] Continuing with batch despite error...`);
+          } finally {
+            if (tabId) {
+              try {
+                  // Wait to ensure download has started
+                  await delay(2000); 
+                  // Check if tab still exists before trying to remove
+                  const currentTabInfo = await chrome.tabs.get(tabId).catch(() => null);
+                  if (currentTabInfo) {
+                      await chrome.tabs.remove(tabId);
+                      console.log(`[BarebonesBgV2.3][Tab ${tabId}] Tab closed.`);
+                  } else {
+                      console.log(`[BarebonesBgV2.3][Tab ${tabId}] Tab already closed or does not exist, no removal needed.`);
+                  }
+              } catch (e) { 
+                console.warn(`[BarebonesBgV2.3][Tab ${tabId}] Failed to close tab:`, e.message);
+              }
+            }
+            console.log(`[BarebonesBgV2.3] ------ Finished URL ${overallIndex + 1}/${msg.urls.length}: ${videoUrl} ------`);
           }
-          console.log(`[BarebonesBgV2.2] ------ Finished URL ${i + 1}/${msg.urls.length}: ${videoUrl} ------`); // Version marker
-          if (i < msg.urls.length - 1) await delay(1500); // Small delay between processing URLs
+        });
+        
+        // Wait for all videos in this batch to complete
+        await Promise.all(batchPromises);
+        console.log(`[BarebonesBgV2.3] ====== Completed Batch ${batchIndex + 1}/${batches.length} ======`);
+        
+        // Wait between batches
+        if (batchIndex < batches.length - 1) {
+          console.log(`[BarebonesBgV2.3] Waiting 3s before next batch...`);
+          await delay(3000);
         }
       }
-      console.log('[BarebonesBgV2.2] All URLs processed.'); // Version marker
+      
+      console.log('[BarebonesBgV2.3] All URLs processed.');
     })();
     return true; // Indicates async response
   }

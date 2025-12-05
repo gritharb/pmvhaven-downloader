@@ -3,7 +3,7 @@
  * -------------------------------------------------
  * UI overhaul: glassy dark panel, big thumbnails,
  * MutationObserver auto-refresh, generous logging.
- * Keeps every idiosyncratic background interface.
+ * Updated for new website layout.
  * -------------------------------------------------
  */
 
@@ -124,40 +124,118 @@
   const $ = (sel) => root.querySelector(sel);
   const listEl = $('#list');
 
-  /* ----------  4.  Link scanner  ---------- */
+  /* ----------  4.  Link scanner (UPDATED)  ---------- */
   function scanLinks() {
-    console.log('[PMV-Elegant] Scanning DOM for <a href="/video/...">');
-    const anchors = Array.from(document.querySelectorAll('a[href^="/video/"]'));
+    console.log('[PMV-Elegant] Scanning DOM for video links...');
+    
+    // Try multiple selectors to catch the video links
+    const selectors = [
+      'a[href^="/video/"]',  // Original selector
+      'a[href*="/video/"]',  // More permissive
+    ];
+    
+    let anchors = [];
+    for (const selector of selectors) {
+      const found = Array.from(document.querySelectorAll(selector));
+      if (found.length > 0) {
+        anchors = found;
+        console.log(`[PMV-Elegant] Found ${found.length} links using selector: ${selector}`);
+        break;
+      }
+    }
+    
+    if (anchors.length === 0) {
+      console.warn('[PMV-Elegant] No video links found with any selector');
+      return [];
+    }
+    
     const unique = new Map();
 
     anchors.forEach(a => {
-      const href = a.getAttribute('href');
-      if (!href) return;
-      const fullUrl = new URL(href, location.origin).href;
+      let href = a.getAttribute('href');
+      if (!href || !href.includes('/video/')) return;
+      
+      // Remove query parameters for deduplication
+      const cleanHref = href.split('?')[0];
+      const fullUrl = new URL(cleanHref, location.origin).href;
+      
       if (unique.has(fullUrl)) return; // de-dupe
 
-      // Thumbnail heuristics
-      let img = a.querySelector('img.v-img__img, img');
+      // Thumbnail heuristics - look more broadly
+      let img = a.querySelector('img');
+      if (!img) {
+        // Try looking in parent or sibling elements
+        const parent = a.parentElement;
+        if (parent) {
+          img = parent.querySelector('img');
+        }
+      }
       if (!img) {
         // fallback: maybe the video preview poster
-        img = a.querySelector('video')?.poster ? { src: a.querySelector('video').poster } : null;
+        const video = a.querySelector('video');
+        if (video?.poster) {
+          img = { src: video.poster };
+        }
       }
+      
       const thumbSrc = img?.src || '';
-      const title = img?.alt || a.textContent.trim() || 'Untitled';
+      
+      // Try to get title from multiple sources
+      let title = '';
+      
+      // Check img alt
+      if (img?.alt) title = img.alt;
+      
+      // Check for h3 or h2 titles in the link
+      if (!title) {
+        const heading = a.querySelector('h3, h2, h1');
+        if (heading) title = heading.textContent.trim();
+      }
+      
+      // Check for title in parent
+      if (!title) {
+        const parent = a.parentElement;
+        if (parent) {
+          const heading = parent.querySelector('h3, h2, h1');
+          if (heading) title = heading.textContent.trim();
+        }
+      }
+      
+      // Fallback to link text
+      if (!title) {
+        title = a.textContent.trim();
+      }
+      
+      // Final fallback
+      if (!title || title.length < 3) {
+        title = 'Untitled';
+      }
+      
+      // Clean up title (remove extra whitespace and newlines)
+      title = title.replace(/\s+/g, ' ').trim();
 
+      console.log(`[PMV-Elegant] Found video: "${title}" -> ${fullUrl}`);
       unique.set(fullUrl, { thumbSrc, title });
     });
 
-    return Array.from(unique.values()).map((data, i) => ({ ...data, url: Array.from(unique.keys())[i] }));
+    const result = Array.from(unique.values()).map((data, i) => ({ 
+      ...data, 
+      url: Array.from(unique.keys())[i] 
+    }));
+    
+    console.log(`[PMV-Elegant] Total unique videos found: ${result.length}`);
+    return result;
   }
 
   /* ----------  5.  Render list  ---------- */
   function render() {
+    console.log('[PMV-Elegant] Rendering video list...');
     const links = scanLinks();
     listEl.innerHTML = '';
 
     if (!links.length) {
-      listEl.innerHTML = '<p style="color:var(--txt-dim);text-align:center;margin:20px 0;">No video links found.</p>';
+      listEl.innerHTML = '<p style="color:var(--txt-dim);text-align:center;margin:20px 0;">No video links found. Try scrolling the page or refreshing.</p>';
+      console.warn('[PMV-Elegant] No videos to render');
       return;
     }
 
@@ -165,7 +243,7 @@
       const item = document.createElement('div');
       item.className = 'item';
       item.innerHTML = `
-        <img class="thumb" src="${thumbSrc}" alt="">
+        <img class="thumb" src="${thumbSrc || 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%2260%22%3E%3Crect fill=%22%23333%22 width=%22100%22 height=%2260%22/%3E%3C/svg%3E'}" alt="">
         <div class="meta">
           <div class="title" title="${title}">${title}</div>
           <div class="extras">
@@ -182,22 +260,31 @@
   }
 
   /* ----------  6.  Button wiring  ---------- */
-  $('#close').addEventListener('click', () => host.remove());
-  $('#refresh').addEventListener('click', render);
+  $('#close').addEventListener('click', () => {
+    console.log('[PMV-Elegant] Closing panel');
+    host.remove();
+  });
+  
+  $('#refresh').addEventListener('click', () => {
+    console.log('[PMV-Elegant] Manual refresh triggered');
+    render();
+  });
 
   $('#toggle').addEventListener('click', () => {
     const boxes = listEl.querySelectorAll('input[type="checkbox"]');
     const allChecked = Array.from(boxes).every(b => b.checked);
     boxes.forEach(b => (b.checked = !allChecked));
+    console.log(`[PMV-Elegant] Toggled all checkboxes to: ${!allChecked}`);
   });
 
   $('#download').addEventListener('click', () => {
     const urls = Array.from(listEl.querySelectorAll('input:checked')).map(b => b.dataset.url);
     if (!urls.length) {
       alert('No videos selected.');
+      console.warn('[PMV-Elegant] Download clicked but no videos selected');
       return;
     }
-    console.log('[PMV-Elegant] Pushing', urls.length, 'URL(s) to background');
+    console.log('[PMV-Elegant] Pushing', urls.length, 'URL(s) to background:', urls);
     chrome.runtime.sendMessage({ action: 'downloadSelected', urls }, (res) => {
       if (chrome.runtime.lastError) {
         console.error('[PMV-Elegant] BG comms error:', chrome.runtime.lastError.message);
@@ -214,12 +301,22 @@
     let id; return (fn, ms = 400) => { clearTimeout(id); id = setTimeout(fn, ms); };
   })();
 
-  const obs = new MutationObserver(() => debounced(render));
+  const obs = new MutationObserver(() => {
+    console.log('[PMV-Elegant] DOM mutation detected, debouncing refresh...');
+    debounced(render);
+  });
   obs.observe(document.body, { childList: true, subtree: true });
 
-  window.addEventListener('popstate', () => debounced(render)); // SPA route swap
+  window.addEventListener('popstate', () => {
+    console.log('[PMV-Elegant] Route change detected, debouncing refresh...');
+    debounced(render);
+  });
 
   /* ----------  8.  Initial paint  ---------- */
-  render();
-  console.log('[PMV-Elegant] UI ready.');
+  // Wait a bit for the page to fully load
+  setTimeout(() => {
+    console.log('[PMV-Elegant] Initial render starting...');
+    render();
+    console.log('[PMV-Elegant] UI ready.');
+  }, 1000);
 })();
