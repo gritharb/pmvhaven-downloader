@@ -4,6 +4,9 @@ console.log('[BarebonesBgV2.3] Background script loaded.'); // Version marker
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Track downloaded videos in this session to avoid duplicates
+const downloadedVideos = new Set();
+
 async function getDownloadUrlFromPage(tabId, videoPageUrl) {
   console.log(`[BarebonesBgV2.3][Tab ${tabId}] Processing: ${videoPageUrl}`); // Version marker
 
@@ -82,9 +85,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     console.log(`[BarebonesBgV2.3] Received ${msg.urls.length} URLs to process.`); // Version marker
 
     (async () => {
-      for (let i = 0; i < msg.urls.length; i++) {
-        const videoUrl = msg.urls[i];
-        console.log(`[BarebonesBgV2.3] ------ Starting URL ${i + 1}/${msg.urls.length}: ${videoUrl} ------`); // Version marker
+      // Filter out already downloaded videos
+      const urlsToDownload = msg.urls.filter(url => {
+        // Extract video ID from URL for tracking
+        const match = url.match(/\/video\/[^_]+_([a-f0-9]+)/);
+        const videoId = match ? match[1] : url;
+        
+        if (downloadedVideos.has(videoId)) {
+          console.log(`[BarebonesBgV2.3] Skipping already downloaded video: ${url} (ID: ${videoId})`);
+          return false;
+        }
+        return true;
+      });
+      
+      const skippedCount = msg.urls.length - urlsToDownload.length;
+      if (skippedCount > 0) {
+        console.log(`[BarebonesBgV2.3] Skipped ${skippedCount} already downloaded video(s)`);
+      }
+      
+      if (urlsToDownload.length === 0) {
+        console.log('[BarebonesBgV2.3] No new videos to download - all were already downloaded in this session.');
+        return;
+      }
+      
+      console.log(`[BarebonesBgV2.3] Processing ${urlsToDownload.length} new videos (${skippedCount} skipped).`);
+      
+      for (let i = 0; i < urlsToDownload.length; i++) {
+        const videoUrl = urlsToDownload[i];
+        
+        // Extract and track video ID
+        const match = videoUrl.match(/\/video\/[^_]+_([a-f0-9]+)/);
+        const videoId = match ? match[1] : videoUrl;
+        
+        console.log(`[BarebonesBgV2.3] ------ Starting URL ${i + 1}/${urlsToDownload.length}: ${videoUrl} ------`); // Version marker
         let tabId;
         try {
           const tab = await chrome.tabs.create({ url: videoUrl, active: false });
@@ -163,6 +196,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               filename: `pmvhaven_downloads/${filename}`
             });
             console.log(`[BarebonesBgV2.3][Tab ${tabId}] Download command issued for ${result.downloadUrl}`);
+            
+            // Mark this video as downloaded
+            downloadedVideos.add(videoId);
+            console.log(`[BarebonesBgV2.3] Video ${videoId} added to downloaded set (total: ${downloadedVideos.size})`);
           } else {
             console.error(`[BarebonesBgV2.3][Tab ${tabId}] No download URL obtained for ${videoUrl}.`);
           }
@@ -187,8 +224,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               console.warn(`[BarebonesBgV2.3][Tab ${tabId}] Failed to close tab:`, e.message);
             }
           }
-          console.log(`[BarebonesBgV2.3] ------ Finished URL ${i + 1}/${msg.urls.length}: ${videoUrl} ------`); // Version marker
-          if (i < msg.urls.length - 1) {
+          console.log(`[BarebonesBgV2.3] ------ Finished URL ${i + 1}/${urlsToDownload.length}: ${videoUrl} ------`); // Version marker
+          if (i < urlsToDownload.length - 1) {
             console.log(`[BarebonesBgV2.3] Waiting 1s before next video...`);
             await delay(1000); // Short delay between processing URLs
           }
